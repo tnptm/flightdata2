@@ -14,6 +14,7 @@ from src.config import (
     OPENSKY_CREDENTIALS,
     POLL_INTERVAL,
     SPI_TIMEOUT,
+    TRACK_MIN_ALTITUDE,
 )
 from src.database import create_batch, create_db_and_tables, log_to_postgres, update_batch_warning
 from src.incident import fetch_and_store_track
@@ -111,6 +112,13 @@ def _evaluate_ghost(
             log.info("Ghost dismissed: icao=%s alt=%.0fm — exceeds max altitude (sensor glitch?)", icao, alt)
         else:
             log.info("Ghost dismissed: icao=%s alt=%s on_ground=%s", icao, alt, on_ground)
+        return
+
+    if alt <= TRACK_MIN_ALTITUDE:
+        log.info(
+            "Low altitude flight disappeared: icao=%s last_alt=%.0fm last_signal=%s — MLAT only, no track data",
+            icao, alt, last_signal,
+        )
         return
 
     missing_s = now - ghost["disappeared_at"]

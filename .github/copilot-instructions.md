@@ -98,6 +98,7 @@ ghost buffer. After it disappears it must remain missing for **≥ 1800 s / 30 m
 - `baro_altitude > 500 m` (`INCIDENT_MIN_ALTITUDE`)
 - `baro_altitude ≤ 25 000 m` (`INCIDENT_MAX_ALTITUDE`) — above this is treated as sensor glitch
 - `on_ground == False`
+- `baro_altitude > 3 000 m` (`TRACK_MIN_ALTITUDE`) — below this aircraft use MLAT; OpenSky stores no track history, so the disappearance is logged as INFO but no track API call is made
 
 ### SPI path (accelerated)
 If the last known state has the **SPI flag** set, the plane still requires `GHOST_MIN_POLLS`
@@ -203,5 +204,6 @@ tail -f logs/tracker.log
 | `GHOST_TIMEOUT` | `1800` | Seconds missing before triggering (normal path) |
 | `GHOST_MIN_POLLS` | `3` | Min polls confirmed before ghost-tracking |
 | `SPI_TIMEOUT` | `900` | Seconds missing before triggering SPI path (default: `GHOST_MIN_POLLS × POLL_INTERVAL`) |
+| `TRACK_MIN_ALTITUDE` | `3000` | Metres — below this, log INFO and skip track fetch (MLAT-only, no track history) |
 | `LOG_FILE` | `logs/tracker.log` | Log file path in container |
 | `LOG_LEVEL` | `INFO` | Logging level |
