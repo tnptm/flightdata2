@@ -9,6 +9,7 @@ GHOST_TIMEOUT: int = int(os.environ.get("GHOST_TIMEOUT", 1800))
 # 3 polls (~15 min of confirmed tracking) before entering ghost buffer
 GHOST_MIN_POLLS: int = int(os.environ.get("GHOST_MIN_POLLS", 3))
 INCIDENT_MIN_ALTITUDE: float = 500.0    # metres — below this, dismiss as landing/low flight
+TRACK_MIN_ALTITUDE: float = 3000.0      # metres — below this, aircraft use MLAT (no track history in OpenSky)
 INCIDENT_MAX_ALTITUDE: float = 25000.0  # metres — above this, treat as sensor glitch (~82,000 ft)
 # Squawk codes that bypass GHOST_MIN_POLLS and GHOST_TIMEOUT (trigger immediately)
 EMERGENCY_SQUAWKS: frozenset[str] = frozenset({"7500", "7700"})  # hijack, general emergency

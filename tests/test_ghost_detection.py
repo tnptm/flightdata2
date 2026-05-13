@@ -1,7 +1,7 @@
 """Tests for the ghost / incident detection state machine (_process_ghosts)."""
 #import pytest
 
-from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MAX_ALTITUDE, INCIDENT_MIN_ALTITUDE, SPI_TIMEOUT
+from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MAX_ALTITUDE, INCIDENT_MIN_ALTITUDE, SPI_TIMEOUT, TRACK_MIN_ALTITUDE
 from src.tracker import _process_ghosts
 from tests.conftest import make_state
 
@@ -234,3 +234,13 @@ def test_incident_not_triggered_when_alt_exceeds_max(mocker):
     _process_ghosts(None, set(), NOW, last, ghosts)
     mock_fetch.assert_not_called()
     assert "AB1234" not in ghosts  # consumed but dismissed
+
+
+def test_low_altitude_flight_logs_info_without_track_fetch(mocker):
+    """Flights below TRACK_MIN_ALTITUDE are MLAT-only — log INFO, skip track fetch."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=TRACK_MIN_ALTITUDE - 1)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" not in ghosts  # consumed

@@ -13,10 +13,11 @@ Each poll cycle the tracker maintains a **ghost buffer** — aircraft seen previ
 | Minimum confirmed polls before ghost-tracking | **3 polls (~15 min)** | Ignores aircraft seen only once; eliminates startup false positives |
 | Missing duration before triggering | **30 minutes** (`GHOST_TIMEOUT=1800`) | ADS-B gaps under 20 min are routine (oceanic dead zones, mountainous terrain, relay coverage gaps) |
 | Minimum last altitude | **500 m** (`INCIDENT_MIN_ALTITUDE`) | Dismisses landings and low-altitude flight |
+| Track threshold | **3 000 m** (`TRACK_MIN_ALTITUDE`) | Below this, aircraft use MLAT — OpenSky holds no track history; disappearance is logged as INFO, no track fetch |
 | Maximum last altitude | **25 000 m / ~82 000 ft** (`INCIDENT_MAX_ALTITUDE`) | Rejects physically impossible readings as sensor glitches |
 | `on_ground = True` | dismissed | Plane was on the ground when last seen |
 
-All five conditions must be satisfied to store a track and write a warning to the batch record.
+Conditions above 3 000 m satisfy all rules → track fetched and warning written to the batch record. Between 500–3 000 m the disappearance is noted in the log but no track API call is made (MLAT-only aircraft have no stored track history in OpenSky).
 
 ### Tier 2 — SPI detection (accelerated)
 
@@ -36,15 +37,16 @@ The altitude and on-ground rules apply to all three tiers.
 Ghost dismissed: icao=a47477 alt=335.28 on_ground=False        # below 500 m
 Ghost dismissed: icao=451cc1 alt=None on_ground=True           # on ground
 Ghost dismissed: icao=a420d7 alt=37125m — exceeds max altitude (sensor glitch?)
+Low altitude flight disappeared: icao=a24e4d last_alt=1783m last_signal=2026-05-13T21:00:00Z — MLAT only, no track data
 ```
 
 ### Incident log examples
 
 ```
-# Tier 1 — normal timeout
+# Tier 1 — normal timeout (ADS-B, track available)
 INCIDENT detected: icao=a1a435 missing=1800s last_alt=9243m last_signal=2026-05-13T15:08:42Z — fetching track
 # Tier 2 — SPI accelerated
-INCIDENT detected: icao=ae1fd4 spi=True missing=900s last_alt=1212m last_signal=2026-05-13T20:22:48Z — fetching track
+INCIDENT detected: icao=ae1fd4 spi=True missing=900s last_alt=7620m last_signal=2026-05-13T20:22:48Z — fetching track
 # Tier 3 — emergency squawk, immediate
 INCIDENT detected: icao=71c701 squawk=7700 last_alt=10660m last_signal=2026-05-13T15:08:41Z — emergency squawk, triggering immediately
 ```
@@ -213,6 +215,7 @@ uv run python -m pytest tests/ -v
 | `GHOST_TIMEOUT` | `1800` | Seconds a normal plane must be missing before triggering |
 | `GHOST_MIN_POLLS` | `3` | Minimum poll cycles a plane must be confirmed before ghost-tracking |
 | `SPI_TIMEOUT` | `900` | Seconds an SPI-flagged plane must be missing before triggering (default: `GHOST_MIN_POLLS × POLL_INTERVAL`) |
+| `TRACK_MIN_ALTITUDE` | `3000` | Metres — below this, log disappearance as INFO but skip track fetch (MLAT-only aircraft) |
 
 ---
 
