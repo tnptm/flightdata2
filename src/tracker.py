@@ -140,8 +140,6 @@ def _evaluate_ghost(
             icao, missing_s, alt, last_signal,
         )
     update_batch_warning(batch_id, f"INCIDENT: {icao} last_alt={alt:.0f}m", db_url=db_url)
-    if credits is not None:
-        credits.charge_track()
     fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
 
 
