@@ -1,7 +1,7 @@
 """Tests for the ghost / incident detection state machine (_process_ghosts)."""
 #import pytest
 
-from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MIN_ALTITUDE
+from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MAX_ALTITUDE, INCIDENT_MIN_ALTITUDE, SPI_TIMEOUT
 from src.tracker import _process_ghosts
 from tests.conftest import make_state
 
@@ -177,15 +177,44 @@ def test_emergency_squawk_triggers_immediately(mocker):
     assert "AB1234" not in ghosts
 
 
-def test_spi_flag_bypasses_min_polls(mocker):
-    """SPI=True must trigger incident despite seen_count below GHOST_MIN_POLLS."""
-    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+def test_spi_flag_respects_min_polls():
+    """SPI=True still requires GHOST_MIN_POLLS — ATC ident is too routine for immediate trigger."""
     last = {"AB1234": make_state("AB1234", spi=True, alt=5000.0)}
     ghosts: dict = {}
-    seen_counts = {"AB1234": 1}
-    _process_ghosts(object(), set(), NOW, last, ghosts, seen_counts=seen_counts)
+    seen_counts = {"AB1234": 1}  # below GHOST_MIN_POLLS
+    _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
+    assert "AB1234" not in ghosts  # did NOT enter ghost buffer
+
+
+def test_spi_flag_enters_buffer_when_min_polls_met(mocker):
+    """SPI=True enters ghost buffer when seen enough times, but uses SPI_TIMEOUT not 0."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    # Pre-populate ghost with spi_only=True, disappeared SPI_TIMEOUT seconds ago
+    ghosts = {"AB1234": {
+        "disappeared_at": NOW - SPI_TIMEOUT,
+        "last_state": make_state("AB1234", spi=True, alt=5000.0),
+        "hard_emergency": False,
+        "spi_only": True,
+    }}
+    _process_ghosts(object(), set(), NOW, last, ghosts)
     mock_fetch.assert_called_once()
     assert "AB1234" not in ghosts
+
+
+def test_spi_ghost_not_triggered_before_spi_timeout(mocker):
+    """SPI ghost must not trigger before SPI_TIMEOUT has elapsed."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": {
+        "disappeared_at": NOW - (SPI_TIMEOUT - 1),
+        "last_state": make_state("AB1234", spi=True, alt=5000.0),
+        "hard_emergency": False,
+        "spi_only": True,
+    }}
+    _process_ghosts(object(), set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" in ghosts  # still waiting
 
 
 def test_non_emergency_squawk_respects_min_polls():
@@ -195,3 +224,13 @@ def test_non_emergency_squawk_respects_min_polls():
     seen_counts = {"AB1234": 1}
     _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
     assert "AB1234" not in ghosts
+
+
+def test_incident_not_triggered_when_alt_exceeds_max(mocker):
+    """Altitude above INCIDENT_MAX_ALTITUDE is treated as sensor glitch, not an incident."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=INCIDENT_MAX_ALTITUDE + 1)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" not in ghosts  # consumed but dismissed

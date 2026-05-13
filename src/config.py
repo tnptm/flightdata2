@@ -8,9 +8,14 @@ OPENSKY_CREDENTIALS: str = os.environ.get("OPENSKY_CREDENTIALS", "credentials.js
 GHOST_TIMEOUT: int = int(os.environ.get("GHOST_TIMEOUT", 1800))
 # 3 polls (~15 min of confirmed tracking) before entering ghost buffer
 GHOST_MIN_POLLS: int = int(os.environ.get("GHOST_MIN_POLLS", 3))
-INCIDENT_MIN_ALTITUDE: float = 500.0  # metres
+INCIDENT_MIN_ALTITUDE: float = 500.0    # metres — below this, dismiss as landing/low flight
+INCIDENT_MAX_ALTITUDE: float = 25000.0  # metres — above this, treat as sensor glitch (~82,000 ft)
 # Squawk codes that bypass GHOST_MIN_POLLS and GHOST_TIMEOUT (trigger immediately)
 EMERGENCY_SQUAWKS: frozenset[str] = frozenset({"7500", "7700"})  # hijack, general emergency
+# SPI (Special Purpose Indicator) — also pilot distress, but routinely set by ATC ident requests.
+# Bypasses GHOST_TIMEOUT but still requires GHOST_MIN_POLLS (avoids false positives from routine ident).
+# 3 poll cycles × 300s = ~15 min missing before triggering.
+SPI_TIMEOUT: int = int(os.environ.get("SPI_TIMEOUT", GHOST_MIN_POLLS * POLL_INTERVAL))
 
 LOG_FILE: str = os.environ.get("LOG_FILE", "logs/tracker.log")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
