@@ -9,6 +9,7 @@ from src.config import (
     EMERGENCY_SQUAWKS,
     GHOST_MIN_POLLS,
     GHOST_TIMEOUT,
+    INCIDENT_MAX_ALTITUDE,
     INCIDENT_MIN_ALTITUDE,
     OPENSKY_CREDENTIALS,
     POLL_INTERVAL,
@@ -82,13 +83,22 @@ def _process_ghosts(
             last_state = ghost["last_state"]
             alt = last_state.get("baro_altitude")
             on_ground = last_state.get("on_ground") or False
-            if alt is not None and alt > INCIDENT_MIN_ALTITUDE and not on_ground:
+            if alt is not None and alt > INCIDENT_MIN_ALTITUDE and alt <= INCIDENT_MAX_ALTITUDE and not on_ground:
                 missing_s = now - ghost["disappeared_at"]
-                squawk_tag = f" squawk={last_state.get('squawk')}" if is_emergency else ""
-                log.warning(
-                    "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm%s — fetching track",
-                    icao, missing_s, alt, squawk_tag,
-                )
+                last_signal = last_state["time"].strftime("%Y-%m-%dT%H:%M:%SZ")
+                if is_emergency:
+                    squawk = last_state.get("squawk")
+                    spi = last_state.get("spi", False)
+                    reason = f"squawk={squawk}" if squawk in EMERGENCY_SQUAWKS else "spi=True" if spi else "emergency"
+                    log.warning(
+                        "INCIDENT detected: icao=%s %s last_alt=%.0fm last_signal=%s — emergency, triggering immediately",
+                        icao, reason, alt, last_signal,
+                    )
+                else:
+                    log.warning(
+                        "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm last_signal=%s — fetching track",
+                        icao, missing_s, alt, last_signal,
+                    )
                 update_batch_warning(
                     batch_id,
                     f"INCIDENT: {icao} last_alt={alt:.0f}m",
@@ -96,7 +106,10 @@ def _process_ghosts(
                 )
                 fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
             else:
-                log.info("Ghost dismissed: icao=%s alt=%s on_ground=%s", icao, alt, on_ground)
+                if alt is not None and alt > INCIDENT_MAX_ALTITUDE:
+                    log.info("Ghost dismissed: icao=%s alt=%.0fm — exceeds max altitude (sensor glitch?)", icao, alt)
+                else:
+                    log.info("Ghost dismissed: icao=%s alt=%s on_ground=%s", icao, alt, on_ground)
 
 
 def main_loop() -> None:

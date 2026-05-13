@@ -1,7 +1,7 @@
 """Tests for the ghost / incident detection state machine (_process_ghosts)."""
 #import pytest
 
-from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MIN_ALTITUDE
+from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MAX_ALTITUDE, INCIDENT_MIN_ALTITUDE
 from src.tracker import _process_ghosts
 from tests.conftest import make_state
 
@@ -195,3 +195,13 @@ def test_non_emergency_squawk_respects_min_polls():
     seen_counts = {"AB1234": 1}
     _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
     assert "AB1234" not in ghosts
+
+
+def test_incident_not_triggered_when_alt_exceeds_max(mocker):
+    """Altitude above INCIDENT_MAX_ALTITUDE is treated as sensor glitch, not an incident."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=INCIDENT_MAX_ALTITUDE + 1)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" not in ghosts  # consumed but dismissed
