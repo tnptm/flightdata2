@@ -6,12 +6,13 @@ import polars as pl
 from opensky_api import OpenSkyApi, TokenManager
 
 from src.config import (
+    GHOST_MIN_POLLS,
     GHOST_TIMEOUT,
     INCIDENT_MIN_ALTITUDE,
     OPENSKY_CREDENTIALS,
     POLL_INTERVAL,
 )
-from src.database import create_db_and_tables, log_to_postgres
+from src.database import create_batch, create_db_and_tables, log_to_postgres, update_batch_warning
 from src.incident import fetch_and_store_track
 from src.logging_setup import setup_logging
 
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 # Reactive state tracking
 _last_known_states: dict = {}  # {icao24: state_dict} — planes seen last poll
 _ghosts: dict = {}             # {icao24: {"disappeared_at": int, "last_state": dict}}
+_seen_counts: dict = {}        # {icao24: int} — total poll cycles each aircraft has been observed
 
 
 def _build_state(s) -> dict:
@@ -45,15 +47,19 @@ def _process_ghosts(
     last_known_states: dict,
     ghosts: dict,
     db_url: str | None = None,
+    batch_id: int | None = None,
+    seen_counts: dict | None = None,
 ) -> None:
     # Step 1: move newly vanished planes into the ghost buffer
     for icao in list(last_known_states.keys()):
         if icao not in current_icaos:
             if icao not in ghosts:
-                ghosts[icao] = {
-                    "disappeared_at": now,
-                    "last_state": last_known_states[icao],
-                }
+                # Only track planes seen in enough consecutive polls (reduces false positives)
+                if seen_counts is None or seen_counts.get(icao, 0) >= GHOST_MIN_POLLS:
+                    ghosts[icao] = {
+                        "disappeared_at": now,
+                        "last_state": last_known_states[icao],
+                    }
             del last_known_states[icao]
 
     # Step 2: evaluate existing ghosts
@@ -70,6 +76,11 @@ def _process_ghosts(
                 log.warning(
                     "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm — fetching track",
                     icao, GHOST_TIMEOUT, alt,
+                )
+                update_batch_warning(
+                    batch_id,
+                    f"INCIDENT: {icao} last_alt={alt:.0f}m",
+                    db_url=db_url,
                 )
                 fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
             else:
@@ -96,14 +107,21 @@ def main_loop() -> None:
 
             for s in response.states:
                 state = _build_state(s)
-                current_icaos.add(state["icao24"])
+                icao = state["icao24"]
+                current_icaos.add(icao)
                 states_list.append(state)
-                _last_known_states[state["icao24"]] = state
+                _last_known_states[icao] = state
+                _seen_counts[icao] = _seen_counts.get(icao, 0) + 1
 
-            log_to_postgres(pl.DataFrame(states_list), "flight_snapshots")
-            log.info("Stored %d flight states (ts=%d)", len(states_list), now)
+            batch_id = create_batch(
+                saved_at=datetime.fromtimestamp(now, tz=timezone.utc),
+                flight_count=len(states_list),
+            )
+            db_rows = [{**s, "batch_id": batch_id} for s in states_list]
+            log_to_postgres(pl.DataFrame(db_rows), "flight_snapshots")
+            log.info("Stored %d flight states in batch %d (ts=%d)", len(states_list), batch_id, now)
 
-            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts)
+            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts, batch_id=batch_id, seen_counts=_seen_counts)
 
         except Exception as e:
             log.error("Main loop error: %s", e, exc_info=True)

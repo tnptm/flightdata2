@@ -13,7 +13,7 @@ def fetch_and_store_track(
     api: OpenSkyApi, icao: str, last_time: int, db_url: str | None = None
 ) -> None:
     try:
-        track = api.get_track_by_aircraft(icao, time=last_time)
+        track = api.get_track_by_aircraft(icao, t=last_time)
         if track and track.path:
             df_track = pl.DataFrame([p.__dict__ for p in track.path])
             incident_df = pl.DataFrame({
