@@ -16,3 +16,4 @@ credentials.json
 # Logs
 logs/
 tracker.log
+claude_chat.md
