@@ -44,23 +44,40 @@ def _build_state(s) -> dict:
     }
 
 
-def _process_ghosts(
-    api: OpenSkyApi,
+def _effective_timeout(ghost: dict) -> int:
+    """Return how long a ghost must be missing before triggering, based on its detection tier."""
+    if ghost.get("hard_emergency"):
+        return 0            # squawk 7700/7500: fire immediately
+    if ghost.get("spi_only"):
+        return SPI_TIMEOUT  # SPI flag: shorter wait (~15 min)
+    return GHOST_TIMEOUT    # normal: 30 min
+
+
+def _qualifies_as_incident(last_state: dict) -> bool:
+    """Return True if a vanished aircraft's last known state warrants an incident report."""
+    alt = last_state.get("baro_altitude")
+    on_ground = last_state.get("on_ground") or False
+    return (
+        alt is not None
+        and INCIDENT_MIN_ALTITUDE < alt <= INCIDENT_MAX_ALTITUDE
+        and not on_ground
+    )
+
+
+def _move_to_ghost_buffer(
     current_icaos: set,
     now: int,
     last_known_states: dict,
     ghosts: dict,
-    db_url: str | None = None,
-    batch_id: int | None = None,
-    seen_counts: dict | None = None,
+    seen_counts: dict | None,
 ) -> None:
-    # Step 1: move newly vanished planes into the ghost buffer
+    """Move newly vanished aircraft into the ghost buffer, applying tier classification."""
     for icao in list(last_known_states.keys()):
         if icao not in current_icaos:
             if icao not in ghosts:
                 last_state = last_known_states[icao]
                 squawk = last_state.get("squawk")
-                hard_emergency = squawk in EMERGENCY_SQUAWKS  # 7700/7500: bypass everything
+                hard_emergency = squawk in EMERGENCY_SQUAWKS  # 7700/7500: bypass min-polls
                 spi_only = last_state.get("spi", False) and not hard_emergency
                 # Hard squawks bypass min-polls; SPI still requires it (ATC ident is routine)
                 if hard_emergency or seen_counts is None or seen_counts.get(icao, 0) >= GHOST_MIN_POLLS:
@@ -72,56 +89,70 @@ def _process_ghosts(
                     }
             del last_known_states[icao]
 
-    # Step 2: evaluate existing ghosts
+
+def _evaluate_ghost(
+    api: OpenSkyApi,
+    icao: str,
+    ghost: dict,
+    now: int,
+    db_url: str | None,
+    batch_id: int | None,
+) -> None:
+    """Log, record, and fetch track for a single ghost that has exceeded its timeout."""
+    last_state = ghost["last_state"]
+    hard_emergency = ghost.get("hard_emergency", False)
+    spi_only = ghost.get("spi_only", False)
+    alt = last_state.get("baro_altitude")
+    on_ground = last_state.get("on_ground") or False
+    last_signal = last_state["time"].strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if not _qualifies_as_incident(last_state):
+        if alt is not None and alt > INCIDENT_MAX_ALTITUDE:
+            log.info("Ghost dismissed: icao=%s alt=%.0fm — exceeds max altitude (sensor glitch?)", icao, alt)
+        else:
+            log.info("Ghost dismissed: icao=%s alt=%s on_ground=%s", icao, alt, on_ground)
+        return
+
+    missing_s = now - ghost["disappeared_at"]
+    if hard_emergency:
+        log.warning(
+            "INCIDENT detected: icao=%s squawk=%s last_alt=%.0fm last_signal=%s — emergency squawk, triggering immediately",
+            icao, last_state.get("squawk"), alt, last_signal,
+        )
+    elif spi_only:
+        log.warning(
+            "INCIDENT detected: icao=%s spi=True missing=%ds last_alt=%.0fm last_signal=%s — fetching track",
+            icao, missing_s, alt, last_signal,
+        )
+    else:
+        log.warning(
+            "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm last_signal=%s — fetching track",
+            icao, missing_s, alt, last_signal,
+        )
+    update_batch_warning(batch_id, f"INCIDENT: {icao} last_alt={alt:.0f}m", db_url=db_url)
+    fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
+
+
+def _process_ghosts(
+    api: OpenSkyApi,
+    current_icaos: set,
+    now: int,
+    last_known_states: dict,
+    ghosts: dict,
+    db_url: str | None = None,
+    batch_id: int | None = None,
+    seen_counts: dict | None = None,
+) -> None:
+    _move_to_ghost_buffer(current_icaos, now, last_known_states, ghosts, seen_counts)
+
     for icao in list(ghosts.keys()):
         if icao in current_icaos:
-            # Reappeared — transient coverage gap, discard
-            del ghosts[icao]
+            del ghosts[icao]  # reappeared — transient coverage gap, discard
             continue
         ghost = ghosts[icao]
-        hard_emergency = ghost.get("hard_emergency", False)
-        spi_only = ghost.get("spi_only", False)
-        if hard_emergency:
-            effective_timeout = 0           # squawk 7700/7500: fire immediately
-        elif spi_only:
-            effective_timeout = SPI_TIMEOUT  # SPI: shorter wait (~15 min)
-        else:
-            effective_timeout = GHOST_TIMEOUT  # normal: 30 min
-        if now - ghost["disappeared_at"] >= effective_timeout:
+        if now - ghost["disappeared_at"] >= _effective_timeout(ghost):
             ghosts.pop(icao)
-            last_state = ghost["last_state"]
-            alt = last_state.get("baro_altitude")
-            on_ground = last_state.get("on_ground") or False
-            if alt is not None and alt > INCIDENT_MIN_ALTITUDE and alt <= INCIDENT_MAX_ALTITUDE and not on_ground:
-                missing_s = now - ghost["disappeared_at"]
-                last_signal = last_state["time"].strftime("%Y-%m-%dT%H:%M:%SZ")
-                if hard_emergency:
-                    squawk = last_state.get("squawk")
-                    log.warning(
-                        "INCIDENT detected: icao=%s squawk=%s last_alt=%.0fm last_signal=%s — emergency squawk, triggering immediately",
-                        icao, squawk, alt, last_signal,
-                    )
-                elif spi_only:
-                    log.warning(
-                        "INCIDENT detected: icao=%s spi=True missing=%ds last_alt=%.0fm last_signal=%s — fetching track",
-                        icao, missing_s, alt, last_signal,
-                    )
-                else:
-                    log.warning(
-                        "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm last_signal=%s — fetching track",
-                        icao, missing_s, alt, last_signal,
-                    )
-                update_batch_warning(
-                    batch_id,
-                    f"INCIDENT: {icao} last_alt={alt:.0f}m",
-                    db_url=db_url,
-                )
-                fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
-            else:
-                if alt is not None and alt > INCIDENT_MAX_ALTITUDE:
-                    log.info("Ghost dismissed: icao=%s alt=%.0fm — exceeds max altitude (sensor glitch?)", icao, alt)
-                else:
-                    log.info("Ghost dismissed: icao=%s alt=%s on_ground=%s", icao, alt, on_ground)
+            _evaluate_ghost(api, icao, ghost, now, db_url, batch_id)
 
 
 def main_loop() -> None:
