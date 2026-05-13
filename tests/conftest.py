@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 import pytest
-from src.models import FlightSnapshot, IncidentTrack  # noqa: F401 — registers tables with SQLModel metadata
-from src.database import create_db_and_tables
+from src.database import create_batch, create_db_and_tables
+from src.models import FlightBatch, FlightSnapshot, IncidentTrack  # noqa: F401 — registers tables with SQLModel metadata
 
 
 @pytest.fixture()
@@ -11,6 +11,15 @@ def db_url(tmp_path):
     url = f"sqlite:///{tmp_path}/test.db"
     create_db_and_tables(url)
     yield url
+
+
+def make_batch(db_url: str, flight_count: int = 1) -> int:
+    """Insert a FlightBatch row and return its id."""
+    return create_batch(
+        saved_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        flight_count=flight_count,
+        db_url=db_url,
+    )
 
 
 def make_state(

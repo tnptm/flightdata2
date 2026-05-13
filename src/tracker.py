@@ -11,7 +11,7 @@ from src.config import (
     OPENSKY_CREDENTIALS,
     POLL_INTERVAL,
 )
-from src.database import create_db_and_tables, log_to_postgres
+from src.database import create_batch, create_db_and_tables, log_to_postgres, update_batch_warning
 from src.incident import fetch_and_store_track
 from src.logging_setup import setup_logging
 
@@ -45,6 +45,7 @@ def _process_ghosts(
     last_known_states: dict,
     ghosts: dict,
     db_url: str | None = None,
+    batch_id: int | None = None,
 ) -> None:
     # Step 1: move newly vanished planes into the ghost buffer
     for icao in list(last_known_states.keys()):
@@ -70,6 +71,11 @@ def _process_ghosts(
                 log.warning(
                     "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm — fetching track",
                     icao, GHOST_TIMEOUT, alt,
+                )
+                update_batch_warning(
+                    batch_id,
+                    f"INCIDENT: {icao} last_alt={alt:.0f}m",
+                    db_url=db_url,
                 )
                 fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
             else:
@@ -100,10 +106,15 @@ def main_loop() -> None:
                 states_list.append(state)
                 _last_known_states[state["icao24"]] = state
 
-            log_to_postgres(pl.DataFrame(states_list), "flight_snapshots")
-            log.info("Stored %d flight states (ts=%d)", len(states_list), now)
+            batch_id = create_batch(
+                saved_at=datetime.fromtimestamp(now, tz=timezone.utc),
+                flight_count=len(states_list),
+            )
+            db_rows = [{**s, "batch_id": batch_id} for s in states_list]
+            log_to_postgres(pl.DataFrame(db_rows), "flight_snapshots")
+            log.info("Stored %d flight states in batch %d (ts=%d)", len(states_list), batch_id, now)
 
-            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts)
+            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts, batch_id=batch_id)
 
         except Exception as e:
             log.error("Main loop error: %s", e, exc_info=True)
