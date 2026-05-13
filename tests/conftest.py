@@ -27,6 +27,8 @@ def make_state(
     alt: float | None = 5000.0,
     on_ground: bool = False,
     t: datetime | None = None,
+    squawk: str | None = None,
+    spi: bool = False,
 ) -> dict:
     """Build a minimal state dict matching the shape produced by _build_state()."""
     return {
@@ -39,4 +41,6 @@ def make_state(
         "velocity": 250.0,
         "heading": 90.0,
         "on_ground": on_ground,
+        "squawk": squawk,
+        "spi": spi,
     }
