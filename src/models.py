@@ -30,6 +30,8 @@ class FlightSnapshot(SQLModel, table=True):
     velocity: Optional[float] = None
     heading: Optional[float] = None
     on_ground: bool = False
+    squawk: Optional[str] = Field(default=None, max_length=4)
+    spi: bool = Field(default=False, sa_column_kwargs={"server_default": text("0")})
 
 
 class IncidentTrack(SQLModel, table=True):

@@ -6,6 +6,7 @@ import polars as pl
 from opensky_api import OpenSkyApi, TokenManager
 
 from src.config import (
+    EMERGENCY_SQUAWKS,
     GHOST_MIN_POLLS,
     GHOST_TIMEOUT,
     INCIDENT_MIN_ALTITUDE,
@@ -25,18 +26,19 @@ _seen_counts: dict = {}        # {icao24: int} — total poll cycles each aircra
 
 
 def _build_state(s) -> dict:
+    t = s.time_position or s.last_contact
     return {
         "icao24": s.icao24,
         "callsign": (s.callsign or "").strip(),
-        "time": datetime.fromtimestamp(
-            s.time_position or s.last_contact, tz=timezone.utc
-        ),
+        "time": datetime.fromtimestamp(t, tz=timezone.utc) if t else datetime.now(tz=timezone.utc),
         "latitude": s.latitude,
         "longitude": s.longitude,
         "baro_altitude": s.baro_altitude,
         "velocity": s.velocity,
         "heading": s.true_track,
         "on_ground": s.on_ground,
+        "squawk": s.squawk,
+        "spi": bool(s.spi),
     }
 
 
@@ -54,11 +56,15 @@ def _process_ghosts(
     for icao in list(last_known_states.keys()):
         if icao not in current_icaos:
             if icao not in ghosts:
-                # Only track planes seen in enough consecutive polls (reduces false positives)
-                if seen_counts is None or seen_counts.get(icao, 0) >= GHOST_MIN_POLLS:
+                last_state = last_known_states[icao]
+                squawk = last_state.get("squawk")
+                is_emergency = last_state.get("spi", False) or squawk in EMERGENCY_SQUAWKS
+                # Emergency squawk/SPI bypasses the min-polls filter
+                if is_emergency or seen_counts is None or seen_counts.get(icao, 0) >= GHOST_MIN_POLLS:
                     ghosts[icao] = {
                         "disappeared_at": now,
-                        "last_state": last_known_states[icao],
+                        "last_state": last_state,
+                        "emergency": is_emergency,
                     }
             del last_known_states[icao]
 
@@ -67,15 +73,21 @@ def _process_ghosts(
         if icao in current_icaos:
             # Reappeared — transient coverage gap, discard
             del ghosts[icao]
-        elif now - ghosts[icao]["disappeared_at"] >= GHOST_TIMEOUT:
-            ghost = ghosts.pop(icao)
+            continue
+        ghost = ghosts[icao]
+        is_emergency = ghost.get("emergency", False)
+        effective_timeout = 0 if is_emergency else GHOST_TIMEOUT
+        if now - ghost["disappeared_at"] >= effective_timeout:
+            ghosts.pop(icao)
             last_state = ghost["last_state"]
             alt = last_state.get("baro_altitude")
             on_ground = last_state.get("on_ground") or False
             if alt is not None and alt > INCIDENT_MIN_ALTITUDE and not on_ground:
+                missing_s = now - ghost["disappeared_at"]
+                squawk_tag = f" squawk={last_state.get('squawk')}" if is_emergency else ""
                 log.warning(
-                    "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm — fetching track",
-                    icao, GHOST_TIMEOUT, alt,
+                    "INCIDENT detected: icao=%s missing=%ds last_alt=%.0fm%s — fetching track",
+                    icao, missing_s, alt, squawk_tag,
                 )
                 update_batch_warning(
                     batch_id,

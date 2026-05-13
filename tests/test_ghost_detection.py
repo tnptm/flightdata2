@@ -1,7 +1,7 @@
 """Tests for the ghost / incident detection state machine (_process_ghosts)."""
 #import pytest
 
-from src.config import GHOST_TIMEOUT, INCIDENT_MIN_ALTITUDE
+from src.config import GHOST_MIN_POLLS, GHOST_TIMEOUT, INCIDENT_MIN_ALTITUDE
 from src.tracker import _process_ghosts
 from tests.conftest import make_state
 
@@ -137,7 +137,6 @@ def test_plane_below_min_polls_skips_ghost_buffer():
 
 def test_plane_at_min_polls_enters_ghost_buffer():
     """A plane seen exactly GHOST_MIN_POLLS times must enter the ghost buffer."""
-    from src.config import GHOST_MIN_POLLS
     last = {"AB1234": make_state("AB1234")}
     ghosts: dict = {}
     seen_counts = {"AB1234": GHOST_MIN_POLLS}
@@ -151,3 +150,48 @@ def test_no_seen_counts_falls_back_to_original_behaviour():
     ghosts: dict = {}
     _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=None)
     assert "AB1234" in ghosts
+
+
+# ---------------------------------------------------------------------------
+# Emergency squawk / SPI bypass
+# ---------------------------------------------------------------------------
+
+def test_emergency_squawk_bypasses_min_polls(mocker):
+    """Squawk 7700 must trigger incident despite seen_count below GHOST_MIN_POLLS."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last = {"AB1234": make_state("AB1234", squawk="7700", alt=5000.0)}
+    ghosts: dict = {}
+    seen_counts = {"AB1234": 1}  # below GHOST_MIN_POLLS
+    _process_ghosts(object(), set(), NOW, last, ghosts, seen_counts=seen_counts)
+    mock_fetch.assert_called_once()  # triggered despite low seen_count
+    assert "AB1234" not in ghosts   # consumed
+
+
+def test_emergency_squawk_triggers_immediately(mocker):
+    """A plane with squawk 7700 triggers on the same cycle it disappears."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last = {"AB1234": make_state("AB1234", squawk="7700", alt=5000.0)}
+    ghosts: dict = {}
+    _process_ghosts(object(), set(), NOW, last, ghosts)
+    mock_fetch.assert_called_once()
+    assert "AB1234" not in ghosts
+
+
+def test_spi_flag_bypasses_min_polls(mocker):
+    """SPI=True must trigger incident despite seen_count below GHOST_MIN_POLLS."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last = {"AB1234": make_state("AB1234", spi=True, alt=5000.0)}
+    ghosts: dict = {}
+    seen_counts = {"AB1234": 1}
+    _process_ghosts(object(), set(), NOW, last, ghosts, seen_counts=seen_counts)
+    mock_fetch.assert_called_once()
+    assert "AB1234" not in ghosts
+
+
+def test_non_emergency_squawk_respects_min_polls():
+    """A normal squawk code must still respect the min-polls filter."""
+    last = {"AB1234": make_state("AB1234", squawk="1234")}
+    ghosts: dict = {}
+    seen_counts = {"AB1234": 1}
+    _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
+    assert "AB1234" not in ghosts
