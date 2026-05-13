@@ -14,8 +14,8 @@ Historical data costs significantly more (30+ credits), but this service only
 ever requests live / same-day data, so every call costs a flat 4 credits.
 
 Each bucket has its own daily allowance (`OPENSKY_CREDITS`, default 4 000 for a
-Standard User). When a bucket is exhausted, `wait_if_needed` blocks the caller
-until midnight UTC resets that bucket.
+Standard User). Usage is tracked in a rolling 24-hour window that begins when
+the bucket is created or last reset.
 """
 
 import logging
@@ -50,7 +50,7 @@ class _Bucket:
         return max(0.0, self.WINDOW_SECONDS - (time.time() - self.window_start))
 
     def charge(self, cost: int) -> None:
-        """Charge `cost` credits, blocking if the bucket is exhausted."""
+        """Charge `cost` credits, blocking until the rolling 24-hour window resets."""
         self._maybe_reset()
         if self.used + cost > self.total:
             wait = self._seconds_until_reset()
@@ -86,4 +86,3 @@ class CreditsTracker:
     def charge_track(self) -> None:
         """Charge for one get_track_by_aircraft() call (4 credits from the tracks bucket)."""
         self.tracks.charge(_LIVE_COST)
-
