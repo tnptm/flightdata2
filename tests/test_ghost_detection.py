@@ -119,3 +119,35 @@ def test_incident_triggered_exactly_at_zero_altitude_boundary(mocker):
     ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=0.0)}
     _process_ghosts(None, set(), NOW, last, ghosts)
     mock_fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# GHOST_MIN_POLLS: planes not yet seen enough times skip ghost buffer
+# ---------------------------------------------------------------------------
+
+def test_plane_below_min_polls_skips_ghost_buffer():
+    """A plane seen only once (count=1) must not enter the ghost buffer."""
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    seen_counts = {"AB1234": 1}
+    _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
+    assert "AB1234" not in ghosts
+    assert "AB1234" not in last  # still removed from last_known
+
+
+def test_plane_at_min_polls_enters_ghost_buffer():
+    """A plane seen exactly GHOST_MIN_POLLS times must enter the ghost buffer."""
+    from src.config import GHOST_MIN_POLLS
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    seen_counts = {"AB1234": GHOST_MIN_POLLS}
+    _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=seen_counts)
+    assert "AB1234" in ghosts
+
+
+def test_no_seen_counts_falls_back_to_original_behaviour():
+    """When seen_counts is None every vanished plane still enters the ghost buffer."""
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    _process_ghosts(None, set(), NOW, last, ghosts, seen_counts=None)
+    assert "AB1234" in ghosts
