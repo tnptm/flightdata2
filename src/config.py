@@ -20,3 +20,5 @@ SPI_TIMEOUT: int = int(os.environ.get("SPI_TIMEOUT", GHOST_MIN_POLLS * POLL_INTE
 
 LOG_FILE: str = os.environ.get("LOG_FILE", "logs/tracker.log")
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
+
+OPENSKY_CREDITS: int = int(os.environ.get("OPENSKY_CREDITS", 4000))
