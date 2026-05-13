@@ -16,6 +16,7 @@ from src.config import (
     SPI_TIMEOUT,
     TRACK_MIN_ALTITUDE,
 )
+from src.credits_tracker import CreditsTracker
 from src.database import create_batch, create_db_and_tables, log_to_postgres, update_batch_warning
 from src.incident import fetch_and_store_track
 from src.logging_setup import setup_logging
@@ -98,6 +99,7 @@ def _evaluate_ghost(
     now: int,
     db_url: str | None,
     batch_id: int | None,
+    credits: CreditsTracker | None = None,
 ) -> None:
     """Log, record, and fetch track for a single ghost that has exceeded its timeout."""
     last_state = ghost["last_state"]
@@ -138,6 +140,8 @@ def _evaluate_ghost(
             icao, missing_s, alt, last_signal,
         )
     update_batch_warning(batch_id, f"INCIDENT: {icao} last_alt={alt:.0f}m", db_url=db_url)
+    if credits is not None:
+        credits.charge_track()
     fetch_and_store_track(api, icao, int(last_state["time"].timestamp()), db_url=db_url)
 
 
@@ -150,6 +154,7 @@ def _process_ghosts(
     db_url: str | None = None,
     batch_id: int | None = None,
     seen_counts: dict | None = None,
+    credits: CreditsTracker | None = None,
 ) -> None:
     _move_to_ghost_buffer(current_icaos, now, last_known_states, ghosts, seen_counts)
 
@@ -160,17 +165,19 @@ def _process_ghosts(
         ghost = ghosts[icao]
         if now - ghost["disappeared_at"] >= _effective_timeout(ghost):
             ghosts.pop(icao)
-            _evaluate_ghost(api, icao, ghost, now, db_url, batch_id)
+            _evaluate_ghost(api, icao, ghost, now, db_url, batch_id, credits)
 
 
 def main_loop() -> None:
     setup_logging()
     api = OpenSkyApi(token_manager=TokenManager.from_json_file(OPENSKY_CREDENTIALS))
+    credits = CreditsTracker()
     create_db_and_tables()
     log.info("Flight tracker started. Polling every %ds.", POLL_INTERVAL)
 
     while True:
         try:
+            credits.charge_states()
             response = api.get_states()
             if not response or not response.states:
                 log.warning("No response from OpenSky API, skipping cycle.")
@@ -197,7 +204,7 @@ def main_loop() -> None:
             log_to_postgres(pl.DataFrame(db_rows), "flight_snapshots")
             log.info("Stored %d flight states in batch %d (ts=%d)", len(states_list), batch_id, now)
 
-            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts, batch_id=batch_id, seen_counts=_seen_counts)
+            _process_ghosts(api, current_icaos, now, _last_known_states, _ghosts, batch_id=batch_id, seen_counts=_seen_counts, credits=credits)
 
         except Exception as e:
             log.error("Main loop error: %s", e, exc_info=True)
