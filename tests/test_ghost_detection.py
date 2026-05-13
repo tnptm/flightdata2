@@ -1,0 +1,121 @@
+"""Tests for the ghost / incident detection state machine (_process_ghosts)."""
+#import pytest
+
+from src.config import GHOST_TIMEOUT, INCIDENT_MIN_ALTITUDE
+from src.tracker import _process_ghosts
+from tests.conftest import make_state
+
+NOW = 1_000_000  # arbitrary fixed timestamp
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+def _timed_ghost(icao: str, seconds_ago: int, **state_kwargs) -> dict:
+    """Pre-populate a ghosts dict entry as if the plane disappeared seconds_ago ago."""
+    return {
+        "disappeared_at": NOW - seconds_ago,
+        "last_state": make_state(icao, **state_kwargs),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 1: vanishing planes move into the ghost buffer
+# ---------------------------------------------------------------------------
+
+def test_vanished_plane_enters_ghost_buffer():
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    assert "AB1234" in ghosts
+    assert "AB1234" not in last
+
+
+def test_vanished_plane_records_disappeared_at():
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    assert ghosts["AB1234"]["disappeared_at"] == NOW
+
+
+def test_present_plane_stays_in_last_known():
+    last = {"AB1234": make_state("AB1234")}
+    ghosts: dict = {}
+    _process_ghosts(None, {"AB1234"}, NOW, last, ghosts)
+    assert "AB1234" in last
+    assert "AB1234" not in ghosts
+
+
+def test_ghost_not_duplicated_on_second_absence():
+    """A plane already in ghosts should not have its disappeared_at reset."""
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=120)}
+    original_time = ghosts["AB1234"]["disappeared_at"]
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    assert ghosts["AB1234"]["disappeared_at"] == original_time
+
+
+# ---------------------------------------------------------------------------
+# Step 2: ghost evaluation
+# ---------------------------------------------------------------------------
+
+def test_reappeared_ghost_is_cleared():
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=120)}
+    _process_ghosts(None, {"AB1234"}, NOW, last, ghosts)
+    assert "AB1234" not in ghosts
+
+
+def test_ghost_below_timeout_not_triggered(mocker):
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT - 1, alt=5000.0)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" in ghosts  # still waiting
+
+
+def test_incident_triggered_at_timeout_with_altitude(mocker):
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=5000.0, on_ground=False)}
+    _process_ghosts(object(), set(), NOW, last, ghosts, db_url=None)
+    mock_fetch.assert_called_once()
+    call_args = mock_fetch.call_args
+    assert call_args.args[1] == "AB1234"  # icao
+    assert "AB1234" not in ghosts  # consumed
+
+
+def test_incident_not_triggered_when_on_ground(mocker):
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=5000.0, on_ground=True)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+    assert "AB1234" not in ghosts  # consumed but dismissed
+
+
+def test_incident_not_triggered_when_alt_too_low(mocker):
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=INCIDENT_MIN_ALTITUDE - 1)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+
+
+def test_incident_not_triggered_when_alt_is_none(mocker):
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=None)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()
+
+
+def test_incident_triggered_exactly_at_zero_altitude_boundary(mocker):
+    """alt=0.0 must NOT trigger — on ground / sea level."""
+    mock_fetch = mocker.patch("src.tracker.fetch_and_store_track")
+    last: dict = {}
+    ghosts = {"AB1234": _timed_ghost("AB1234", seconds_ago=GHOST_TIMEOUT, alt=0.0)}
+    _process_ghosts(None, set(), NOW, last, ghosts)
+    mock_fetch.assert_not_called()

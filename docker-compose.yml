@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      POLL_INTERVAL: "${POLL_INTERVAL:-300}"
+      OPENSKY_CREDENTIALS: "${OPENSKY_CREDENTIALS:-credentials.json}"
+      LOG_FILE: "${LOG_FILE:-logs/tracker.log}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
