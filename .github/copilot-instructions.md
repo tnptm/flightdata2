@@ -99,10 +99,17 @@ ghost buffer. After it disappears it must remain missing for **≥ 1800 s / 30 m
 - `baro_altitude ≤ 25 000 m` (`INCIDENT_MAX_ALTITUDE`) — above this is treated as sensor glitch
 - `on_ground == False`
 
+### SPI path (accelerated)
+If the last known state has the **SPI flag** set, the plane still requires `GHOST_MIN_POLLS`
+before entering the ghost buffer (ATC ident requests are routine — skipping this check caused
+too many false positives). After entering, timeout is `SPI_TIMEOUT` (default
+`GHOST_MIN_POLLS × POLL_INTERVAL` ≈ 15 min) instead of 30 min. Altitude/on-ground rules apply.
+
 ### Emergency path (immediate)
-If the last known state has **squawk `7700`** (general emergency), **`7500`**
-(hijack), or **SPI flag** set, both filters are bypassed and the incident triggers
-on the same cycle the plane vanishes. Altitude and on-ground rules still apply.
+If the last known state has **squawk `7700`** (general emergency) or **`7500`**
+(hijack), both filters (`GHOST_MIN_POLLS` and `GHOST_TIMEOUT`) are bypassed and the
+incident triggers on the same cycle the plane vanishes. Altitude and on-ground rules still apply.
+These codes require deliberate pilot action — accidental activation is extremely rare.
 
 ---
 
@@ -193,7 +200,8 @@ tail -f logs/tracker.log
 | `POSTGRES_PORT_INTERNAL` | `5432` | Internal container port |
 | `POLL_INTERVAL` | `300` | Seconds between API polls |
 | `OPENSKY_CREDENTIALS` | `credentials.json` | Path to credentials file in container |
-| `GHOST_TIMEOUT` | `1800` | Seconds missing before triggering |
+| `GHOST_TIMEOUT` | `1800` | Seconds missing before triggering (normal path) |
 | `GHOST_MIN_POLLS` | `3` | Min polls confirmed before ghost-tracking |
+| `SPI_TIMEOUT` | `900` | Seconds missing before triggering SPI path (default: `GHOST_MIN_POLLS × POLL_INTERVAL`) |
 | `LOG_FILE` | `logs/tracker.log` | Log file path in container |
 | `LOG_LEVEL` | `INFO` | Logging level |

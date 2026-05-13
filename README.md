@@ -6,7 +6,7 @@ Polls the [OpenSky Network](https://opensky-network.org/) API every 5 minutes, s
 
 Each poll cycle the tracker maintains a **ghost buffer** — aircraft seen previously but absent from the latest API response. A ghost is evaluated against the rules below once per cycle.
 
-### Normal detection (timeout-based)
+### Tier 1 — Normal detection (timeout-based)
 
 | Rule | Value | Reason |
 |---|---|---|
@@ -18,9 +18,17 @@ Each poll cycle the tracker maintains a **ghost buffer** — aircraft seen previ
 
 All five conditions must be satisfied to store a track and write a warning to the batch record.
 
-### Emergency detection (immediate)
+### Tier 2 — SPI detection (accelerated)
 
-If the last known state has **squawk `7700`** (general emergency) or **`7500`** (hijack), or the **SPI flag** (Special Purpose Indicator) is set, the aircraft bypasses both the min-polls filter and the 30-minute timeout and triggers immediately when it vanishes. The altitude and on-ground rules still apply.
+If the last known state has the **SPI flag** (Special Purpose Indicator) set, the aircraft uses a shorter timeout of **~15 minutes** (`SPI_TIMEOUT`, default `GHOST_MIN_POLLS × POLL_INTERVAL`). The minimum-polls filter still applies — the plane must have been confirmed in ≥ 3 polls before the SPI path activates.
+
+Rationale: ATC routinely asks pilots to "squawk ident", which activates SPI for ~18 seconds. A plane that idents and then enters a coverage gap is common. Requiring ≥ 3 confirmed polls before tracking prevents routine idents from flooding the incident log, while the shorter timeout still responds faster than the 30-minute normal path if SPI was a genuine distress signal.
+
+### Tier 3 — Emergency squawk detection (immediate)
+
+If the last known state has **squawk `7700`** (general emergency) or **`7500`** (hijack), the aircraft bypasses both the min-polls filter and all timeouts and triggers on the same cycle it vanishes. These codes require the pilot to manually dial a 4-digit code — accidental activation is extremely rare.
+
+The altitude and on-ground rules apply to all three tiers.
 
 ### Dismissal log examples
 
@@ -33,8 +41,12 @@ Ghost dismissed: icao=a420d7 alt=37125m — exceeds max altitude (sensor glitch?
 ### Incident log examples
 
 ```
+# Tier 1 — normal timeout
 INCIDENT detected: icao=a1a435 missing=1800s last_alt=9243m last_signal=2026-05-13T15:08:42Z — fetching track
-INCIDENT detected: icao=71c701 squawk=7700 last_alt=10660m last_signal=2026-05-13T15:08:41Z — emergency, triggering immediately
+# Tier 2 — SPI accelerated
+INCIDENT detected: icao=ae1fd4 spi=True missing=900s last_alt=1212m last_signal=2026-05-13T20:22:48Z — fetching track
+# Tier 3 — emergency squawk, immediate
+INCIDENT detected: icao=71c701 squawk=7700 last_alt=10660m last_signal=2026-05-13T15:08:41Z — emergency squawk, triggering immediately
 ```
 
 ### Configuration
@@ -198,8 +210,9 @@ uv run python -m pytest tests/ -v
 | `OPENSKY_CREDENTIALS` | `credentials.json` | Path to credentials file inside container |
 | `LOG_FILE` | `logs/tracker.log` | Log file path inside container |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `GHOST_TIMEOUT` | `1800` | Seconds a plane must be missing before triggering incident detection |
-| `GHOST_MIN_POLLS` | `3` | Minimum poll cycles a plane must be confirmed before entering the ghost buffer |
+| `GHOST_TIMEOUT` | `1800` | Seconds a normal plane must be missing before triggering |
+| `GHOST_MIN_POLLS` | `3` | Minimum poll cycles a plane must be confirmed before ghost-tracking |
+| `SPI_TIMEOUT` | `900` | Seconds an SPI-flagged plane must be missing before triggering (default: `GHOST_MIN_POLLS × POLL_INTERVAL`) |
 
 ---
 
